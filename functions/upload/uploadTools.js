@@ -224,98 +224,50 @@ export async function isBlockedUploadIp(env, uploadIp) {
     }
 }
 
-// 构建唯一文件ID
+// 构建唯一文件ID（不带随机数）
 export async function buildUniqueFileId(context, fileName, fileType = 'application/octet-stream') {
     const { env, url } = context;
     const db = getDatabase(env);
 
+    // 获取扩展名
     let fileExt = fileName.split('.').pop();
     if (!fileExt || fileExt === fileName) {
         fileExt = fileType.split('/').pop();
-        if (fileExt === fileType || fileExt === '' || fileExt === null || fileExt === undefined) {
+        if (!fileExt || fileExt === fileType) {
             fileExt = 'unknown';
         }
     }
 
-    const nameType = url.searchParams.get('uploadNameType') || 'default';
+    // 读取上传文件夹参数
     const uploadFolder = url.searchParams.get('uploadFolder') || '';
-    const normalizedFolder = uploadFolder 
-        ? uploadFolder.replace(/^\/+/, '').replace(/\/{2,}/g, '/').replace(/\/$/, '') 
+    const normalizedFolder = uploadFolder
+        ? uploadFolder.replace(/^\/+/, '').replace(/\/{2,}/g, '/').replace(/\/$/, '')
         : '';
-    
-    if (!isExtValid(fileExt)) {
-        fileExt = fileType.split('/').pop();
-        if (fileExt === fileType || fileExt === '' || fileExt === null || fileExt === undefined) {
-            fileExt = 'unknown';
-        }
-    }
 
-    // 处理文件名，移除特殊字符
+    // 清理非法字符
     fileName = sanitizeFileName(fileName);
 
-    const unique_index = Date.now() + Math.floor(Math.random() * 10000);
-    let baseId = '';
-    
-    // 根据命名方式构建基础ID
-    if (nameType === 'index') {
-        baseId = normalizedFolder ? `${normalizedFolder}/${unique_index}.${fileExt}` : `${unique_index}.${fileExt}`;
-    } else if (nameType === 'origin') {
-        baseId = normalizedFolder ? `${normalizedFolder}/${fileName}` : fileName;
-    } else if (nameType === 'short') {
-        // 对于短链接，直接在循环中生成不重复的ID
-        while (true) {
-            const shortId = generateShortId(8);
-            const testFullId = normalizedFolder ? `${normalizedFolder}/${shortId}.${fileExt}` : `${shortId}.${fileExt}`;
-            if (await db.get(testFullId) === null) {
-                return testFullId;
-            }
-        }
-    } else {
-        baseId = normalizedFolder ? `${normalizedFolder}/${unique_index}_${fileName}` : `${unique_index}_${fileName}`;
-    }
-    
-    // 检查基础ID是否已存在
-    if (await db.get(baseId) === null) {
-        return baseId;
-    }
-    
-    // 如果已存在，在文件名后面加上递增编号
+    // 默认路径 = 文件夹 + 文件名
+    let baseId = normalizedFolder ? `${normalizedFolder}/${fileName}` : fileName;
+
+    // 若该文件已存在，则添加 (1)、(2)… 避免覆盖
     let counter = 1;
-    while (true) {
-        let duplicateId;
-        
-        if (nameType === 'index') {
-            const baseName = unique_index;
-            duplicateId = normalizedFolder ? 
-                `${normalizedFolder}/${baseName}(${counter}).${fileExt}` : 
-                `${baseName}(${counter}).${fileExt}`;
-        } else if (nameType === 'origin') {
-            const nameWithoutExt = fileName.substring(0, fileName.lastIndexOf('.'));
-            const ext = fileName.substring(fileName.lastIndexOf('.'));
-            duplicateId = normalizedFolder ? 
-                `${normalizedFolder}/${nameWithoutExt}(${counter})${ext}` : 
-                `${nameWithoutExt}(${counter})${ext}`;
-        } else {
-            const baseName = `${unique_index}_${fileName}`;
-            const nameWithoutExt = baseName.substring(0, baseName.lastIndexOf('.'));
-            const ext = baseName.substring(baseName.lastIndexOf('.'));
-            duplicateId = normalizedFolder ? 
-                `${normalizedFolder}/${nameWithoutExt}(${counter})${ext}` : 
-                `${nameWithoutExt}(${counter})${ext}`;
-        }
-        
-        // 检查新ID是否已存在
-        if (await db.get(duplicateId) === null) {
-            return duplicateId;
-        }
-        
+    const extIndex = fileName.lastIndexOf('.');
+    const nameWithoutExt = extIndex !== -1 ? fileName.substring(0, extIndex) : fileName;
+    const ext = extIndex !== -1 ? fileName.substring(extIndex) : '';
+
+    while (await db.get(baseId) !== null) {
+        baseId = normalizedFolder
+            ? `${normalizedFolder}/${nameWithoutExt}(${counter})${ext}`
+            : `${nameWithoutExt}(${counter})${ext}`;
         counter++;
-        
-        // 防止无限循环，最多尝试1000次
+
         if (counter > 1000) {
             throw new Error('无法生成唯一的文件ID');
         }
     }
+
+    return baseId;
 }
 
 // 基于uploadId的一致性渠道选择
